@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DiffYard — compare &amp; merge files</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #1a1d23;
+  --panel-2: #20242c;
+  --panel-3: #262b34;
+  --border: #2c313b;
+  --text: #e7e9ee;
+  --text-dim: #9098a8;
+  --text-faint: #5c6372;
+  --accent: #6c8ebf;
+  --accent-bright: #8fb4e8;
+  --add-bg: rgba(46, 168, 107, 0.16);
+  --add-strong: #3fbd7e;
+  --rem-bg: rgba(229, 83, 75, 0.16);
+  --rem-strong: #e5534b;
+  --mod-bg: rgba(212, 167, 44, 0.14);
+  --mod-strong: #d4a72c;
+  --same-dim: #3a4049;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --sans: 'Inter', system-ui, sans-serif;
+}
+[data-theme="light"] {
+  --bg: #f7f6f3; --panel: #ffffff; --panel-2: #f0efe9; --panel-3: #e9e6dd; --border: #ddd9d0;
+  --text: #22242a; --text-dim: #63667a; --text-faint: #9a9caa;
+  --accent: #3f5f8a; --accent-bright: #2f4d75;
+  --add-bg: rgba(46,168,107,.14); --add-strong: #1f8f56;
+  --rem-bg: rgba(229,83,75,.13); --rem-strong: #c8382f;
+  --mod-bg: rgba(212,167,44,.16); --mod-strong: #a67f13;
+  --same-dim: #cfcbc0;
+}
+[data-theme="highcontrast"] {
+  --bg: #000; --panel: #0a0a0a; --panel-2: #141414; --panel-3: #1c1c1c; --border: #3d3d3d;
+  --text: #fff; --text-dim: #c4c4c4; --text-faint: #7a7a7a;
+  --accent: #4da6ff; --accent-bright: #7ac0ff;
+  --add-bg: rgba(0,230,118,.22); --add-strong: #00e676;
+  --rem-bg: rgba(255,82,82,.22); --rem-strong: #ff5252;
+  --mod-bg: rgba(255,214,0,.2); --mod-strong: #ffd600;
+  --same-dim: #4a4a4a;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; -webkit-font-smoothing: antialiased; }
+::selection { background: var(--accent); color: #fff; }
+button { font-family: var(--sans); cursor: pointer; }
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+/* ===== Top bar ===== */
+.topbar { display: flex; align-items: center; gap: 10px; padding: 9px 16px; background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap; position: relative; z-index: 50; }
+.brand { font-family: var(--mono); font-weight: 700; font-size: 15px; letter-spacing: -0.02em; display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.brand .dot { color: var(--accent-bright); }
+.brand .sub { font-family: var(--sans); font-weight: 400; font-size: 11px; color: var(--text-faint); }
+.topbar-spacer { flex: 1; }
+
+.btn { border: 1px solid var(--border); background: var(--panel-2); color: var(--text); padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; transition: border-color .15s, background .15s; white-space: nowrap; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { background: var(--accent-bright); border-color: var(--accent-bright); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* dropdown menus */
+.menu-wrap { position: relative; }
+.menu-panel {
+  display: none;
+  position: absolute; top: calc(100% + 6px); left: 0;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px; min-width: 260px; box-shadow: 0 12px 32px rgba(0,0,0,.35);
+  z-index: 100;
+}
+.menu-panel.open { display: block; }
+.menu-panel.wide { min-width: 320px; }
+.menu-title { font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-faint); font-weight: 700; margin-bottom: 8px; }
+
+.opt-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 2px; font-size: 12.5px; color: var(--text-dim); gap: 10px; }
+.opt-row label { cursor: pointer; flex: 1; }
+.switch { position: relative; width: 32px; height: 18px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.switch .track { position: absolute; inset: 0; background: var(--border); border-radius: 20px; transition: background .15s; cursor: pointer; }
+.switch .track::before { content: ''; position: absolute; width: 14px; height: 14px; left: 2px; top: 2px; background: var(--text-dim); border-radius: 50%; transition: transform .15s, background .15s; }
+.switch input:checked + .track { background: var(--accent); }
+.switch input:checked + .track::before { transform: translateX(14px); background: #fff; }
+
+select, .textinput { width: 100%; background: var(--panel-3); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 8px; font-size: 12px; font-family: var(--sans); }
+.textinput { font-family: var(--mono); }
+.hint { font-size: 10.5px; color: var(--text-faint); line-height: 1.4; margin-top: 4px; }
+.divider { height: 1px; background: var(--border); margin: 10px 0; }
+
+.tag-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.tag { background: var(--panel-3); border: 1px solid var(--border); color: var(--text-dim); font-family: var(--mono); font-size: 11px; padding: 3px 8px; border-radius: 12px; display: flex; align-items: center; gap: 5px; }
+.tag button { border: none; background: none; color: var(--text-faint); font-size: 12px; line-height: 1; padding: 0; }
+.tag button:hover { color: var(--rem-strong); }
+.add-row { display: flex; gap: 4px; margin-top: 6px; }
+.add-row input { flex: 1; }
+.add-row button { padding: 6px 10px; }
+
+/* file chip list inside menu */
+.file-chip { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; margin-bottom: 4px; font-family: var(--mono); font-size: 12px; background: var(--panel-3); }
+.file-chip.excluded { opacity: .4; text-decoration: line-through; }
+.file-chip .fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-chip button, .file-chip .eye { border: none; background: none; color: var(--text-faint); font-size: 13px; line-height: 1; padding: 2px 4px; border-radius: 4px; }
+.file-chip button:hover { color: var(--rem-strong); }
+.file-chip .eye.on { color: var(--accent-bright); }
+.drop-zone { border: 1.5px dashed var(--border); border-radius: 8px; padding: 12px 10px; text-align: center; font-size: 12px; color: var(--text-faint); cursor: pointer; margin-bottom: 8px; }
+.drop-zone:hover, .drop-zone.dragover { border-color: var(--accent); color: var(--accent-bright); }
+input[type=file] { display: none; }
+.paste-box textarea { width: 100%; height: 70px; background: var(--panel-3); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 8px; font-family: var(--mono); font-size: 11.5px; resize: vertical; margin-bottom: 6px; }
+.paste-box input[type=text] { margin-bottom: 6px; }
+.paste-box button { width: 100%; justify-content: center; }
+
+.theme-mini { display: flex; gap: 2px; background: var(--panel-3); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
+.theme-mini button { border: none; background: transparent; color: var(--text-dim); padding: 5px 9px; font-size: 11.5px; border-radius: 6px; font-weight: 500; }
+.theme-mini button.active { background: var(--accent); color: #fff; }
+
+/* ===== Similarity strip ===== */
+.sim-strip { display: flex; align-items: center; gap: 6px; padding: 8px 16px; background: var(--panel-2); border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; }
+.sim-strip .strip-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); font-weight: 700; margin-right: 4px; white-space: nowrap; }
+.sim-chip { font-family: var(--mono); font-size: 11.5px; font-weight: 600; padding: 5px 10px; border-radius: 7px; border: 1px solid; cursor: pointer; white-space: nowrap; transition: transform .1s; display: inline-flex; align-items: center; gap: 6px; }
+.sim-chip:hover { transform: translateY(-1px); }
+.sim-chip.current { outline: 2px solid var(--accent-bright); outline-offset: 1px; }
+.sim-chip .names { color: var(--text-dim); font-weight: 500; }
+
+/* ===== Content ===== */
+.main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-faint); text-align: center; padding: 40px; }
+.empty-state .glyph { font-family: var(--mono); font-size: 42px; color: var(--border); margin-bottom: 14px; font-weight: 700; }
+.empty-state h2 { font-size: 16px; color: var(--text-dim); font-weight: 600; margin: 0 0 6px; }
+.empty-state p { font-size: 13px; max-width: 360px; line-height: 1.5; margin: 0 0 16px; }
+
+.matrix-wrap { flex: 1; overflow: auto; padding: 24px 28px; }
+.matrix-header { margin-bottom: 18px; }
+.matrix-header h2 { font-size: 15px; margin: 0 0 4px; font-weight: 700; }
+.matrix-header p { color: var(--text-faint); font-size: 12.5px; margin: 0; }
+.matrix-table { border-collapse: separate; border-spacing: 4px; }
+.matrix-table th { font-family: var(--mono); font-weight: 500; font-size: 11px; color: var(--text-dim); padding: 6px 8px; text-align: left; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.matrix-table th.rot { writing-mode: vertical-rl; transform: rotate(180deg); text-align: left; vertical-align: bottom; height: 90px; max-width: none; }
+.mcell { width: 62px; height: 40px; border-radius: 7px; font-family: var(--mono); font-size: 12px; font-weight: 600; text-align: center; vertical-align: middle; cursor: pointer; border: 1px solid var(--border); transition: transform .1s, border-color .1s; color: var(--text); }
+.mcell:hover { transform: scale(1.06); border-color: var(--accent-bright); z-index: 2; position: relative; }
+.mcell.diag { background: transparent; border: none; cursor: default; }
+.mcell.diag:hover { transform: none; }
+.legend { display: flex; align-items: center; gap: 16px; margin-top: 18px; font-size: 11.5px; color: var(--text-faint); }
+.legend .swatch { display: inline-flex; align-items: center; gap: 6px; }
+.legend .sq { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+.diff-toolbar { display: flex; align-items: center; gap: 10px; padding: 9px 16px; background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0; font-size: 12.5px; }
+.diff-toolbar .back { color: var(--accent-bright); background: none; border: none; font-size: 12.5px; font-weight: 500; padding: 4px 0; display: flex; align-items: center; gap: 4px; }
+.diff-toolbar .filenames { font-family: var(--mono); color: var(--text-dim); display: flex; align-items: center; gap: 8px; }
+.diff-toolbar .filenames .vs { color: var(--text-faint); }
+.diff-toolbar .stats { margin-left: auto; display: flex; gap: 12px; font-family: var(--mono); font-size: 11.5px; }
+.diff-toolbar .stats span { display: flex; align-items: center; gap: 5px; }
+.diff-toolbar .stats .dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
+.diff-panes { flex: 1; display: flex; min-height: 0; overflow: hidden; }
+.pane { flex: 1; min-width: 0; overflow: auto; background: var(--panel); border-right: 1px solid var(--border); position: relative; }
+.pane:last-child { border-right: none; }
+.pane-head { position: sticky; top: 0; background: var(--panel-2); border-bottom: 1px solid var(--border); padding: 7px 14px; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); z-index: 3; display: flex; justify-content: space-between; align-items: center; }
+.pane-head .editable-tag { font-size: 9.5px; color: var(--accent-bright); border: 1px solid var(--accent-bright); border-radius: 10px; padding: 1px 7px; text-transform: uppercase; letter-spacing: .04em; }
+
+.code-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; table-layout: fixed; }
+.code-table .ln-col { width: 44px; }
+.code-table .merge-col { width: 30px; }
+.code-table td { padding: 1px 8px; white-space: pre-wrap; word-break: break-word; vertical-align: top; }
+.code-table .ln { text-align: right; color: var(--text-faint); user-select: none; padding-right: 10px; border-right: 1px solid var(--border); background: var(--panel); position: sticky; left: 0; }
+.code-table .merge-btn-cell { text-align: center; padding: 1px 2px; border-right: 1px solid var(--border); background: var(--panel-2); }
+.merge-btn { border: none; background: var(--panel-3); color: var(--accent-bright); width: 20px; height: 18px; border-radius: 4px; font-size: 11px; line-height: 1; padding: 0; opacity: .75; }
+.merge-btn:hover { background: var(--accent); color: #fff; opacity: 1; }
+.code-table .content-cell { outline: none; }
+.content-cell[contenteditable="true"]:focus { background: rgba(140,180,232,0.08); }
+.row-add { background: var(--add-bg); }
+.row-rem { background: var(--rem-bg); }
+.row-mod { background: var(--mod-bg); }
+.row-empty { background: repeating-linear-gradient(135deg, transparent, transparent 6px, var(--panel-2) 6px, var(--panel-2) 7px); }
+.row-empty td { color: transparent; }
+.diff-only-hidden { display: none; }
+.chmark { display: inline-block; width: 14px; text-align: center; color: var(--text-faint); user-select: none; }
+.row-add .chmark { color: var(--add-strong); }
+.row-rem .chmark { color: var(--rem-strong); }
+.row-mod .chmark { color: var(--mod-strong); }
+mark.inline-diff { background: transparent; border-radius: 2px; padding: 0; }
+.row-add mark.inline-diff, .pane-b mark.inline-diff.mod-mark { background: var(--add-strong); color: #06130c; border-radius: 2px; }
+.row-rem mark.inline-diff, .pane-a mark.inline-diff.mod-mark { background: var(--rem-strong); color: #1c0605; border-radius: 2px; }
+.no-lineno .ln-col, .no-lineno .ln { display: none; }
+.hide-same .row-same { display: none; }
+.highlight-same .row-same td { background: var(--same-dim); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--panel); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+
+/* modal for save-as-zip */
+.modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 500; align-items: center; justify-content: center; }
+.modal-backdrop.open { display: flex; }
+.modal { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; width: 420px; max-width: 92vw; max-height: 85vh; overflow-y: auto; }
+.modal h3 { margin: 0 0 4px; font-size: 15px; }
+.modal p.desc { color: var(--text-faint); font-size: 12px; margin: 0 0 16px; }
+.modal-file-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.modal-file-row .mname { flex: 1; font-family: var(--mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-file-row input.ext { width: 78px; font-family: var(--mono); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+@media (max-width: 860px) {
+  .diff-panes { flex-direction: column; }
+  .pane { border-right: none; border-bottom: 1px solid var(--border); }
+}
+</style>
+</head>
+<body data-theme="dark">
+<div class="app">
+
+  <div class="topbar" id="topbar">
+    <div class="brand"><span class="dot">◆</span>DiffYard<span class="sub">compare &amp; merge</span></div>
+
+    <div class="menu-wrap">
+      <button class="btn" id="filesMenuBtn">Files <span id="fileCountBadge"></span> ▾</button>
+      <div class="menu-panel wide" id="filesMenu">
+        <div class="menu-title">Add files</div>
+        <div class="drop-zone" id="dropZone">Drop files here or click to browse<input type="file" id="fileInput" multiple></div>
+        <div class="paste-box">
+          <input type="text" class="textinput" id="pasteName" placeholder="Name this snippet (e.g. version-A)">
+          <textarea id="pasteText" placeholder="Paste content here..."></textarea>
+          <button class="btn primary" id="pasteAddBtn">Add as file</button>
+        </div>
+        <div class="divider"></div>
+        <div class="menu-title">Loaded files</div>
+        <div id="fileList"></div>
+      </div>
+    </div>
+
+    <div class="menu-wrap">
+      <button class="btn" id="displayMenuBtn">Display ▾</button>
+      <div class="menu-panel" id="displayMenu">
+        <div class="menu-title">Display options</div>
+        <div class="opt-row"><label for="optLineNumbers">Line numbers</label><div class="switch"><input type="checkbox" id="optLineNumbers" checked><span class="track"></span></div></div>
+        <div class="opt-row"><label for="optHighlightDiff">Highlight differences</label><div class="switch"><input type="checkbox" id="optHighlightDiff" checked><span class="track"></span></div></div>
+        <div class="opt-row"><label for="optHighlightSame">Highlight identical lines</label><div class="switch"><input type="checkbox" id="optHighlightSame"><span class="track"></span></div></div>
+        <div class="opt-row"><label for="optInlineChars">Inline word diff</label><div class="switch"><input type="checkbox" id="optInlineChars" checked><span class="track"></span></div></div>
+        <div class="opt-row"><label for="optDiffOnly">Show differences only</label><div class="switch"><input type="checkbox" id="optDiffOnly"><span class="track"></span></div></div>
+        <div class="opt-row"><label for="optIgnoreCase">Ignore case</label><div class="switch"><input type="checkbox" id="optIgnoreCase"><span class="track"></span></div></div>
+        <div class="opt-row"><label for="optIgnoreWhitespace">Ignore whitespace</label><div class="switch"><input type="checkbox" id="optIgnoreWhitespace"><span class="track"></span></div></div>
+        <div class="opt-row"><label for="optSyncScroll">Sync scroll</label><div class="switch"><input type="checkbox" id="optSyncScroll" checked><span class="track"></span></div></div>
+        <div class="opt-row"><label for="optEditable">Editable panes</label><div class="switch"><input type="checkbox" id="optEditable" checked><span class="track"></span></div></div>
+        <div class="divider"></div>
+        <div class="menu-title">Theme</div>
+        <div class="theme-mini" id="themeSwitch">
+          <button data-theme="dark" class="active">Dark</button>
+          <button data-theme="light">Light</button>
+          <button data-theme="highcontrast">Contrast</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="menu-wrap">
+      <button class="btn" id="excludeMenuBtn">Exclude ▾</button>
+      <div class="menu-panel wide" id="excludeMenu">
+        <div class="menu-title">Exclude content (regex or plain text)</div>
+        <div class="hint" style="margin-bottom:6px;">Lines matching any pattern are stripped from every file before comparing.</div>
+        <div class="add-row"><input type="text" class="textinput" id="excludePatternInput" placeholder="e.g. ^// or \d{4}-\d{2}-\d{2}"><button class="btn" id="excludePatternAdd">Add</button></div>
+        <div class="tag-list" id="excludePatternList"></div>
+      </div>
+    </div>
+
+    <div class="menu-wrap">
+      <button class="btn" id="constraintMenuBtn">Constraint ▾</button>
+      <div class="menu-panel wide" id="constraintMenu">
+        <div class="menu-title">Constraint filter</div>
+        <div class="hint" style="margin-bottom:6px;">Only flag a line as different if it also matches this.</div>
+        <select id="constraintType">
+          <option value="none">No constraint — show all diffs</option>
+          <option value="contains">Line contains word/phrase</option>
+          <option value="hasnumber">Line has a number</option>
+          <option value="regex">Line matches regex</option>
+          <option value="minlen">Line longer than N characters</option>
+        </select>
+        <input type="text" class="textinput" id="constraintValue" placeholder="value..." style="display:none; margin-top:6px;">
+        <div class="hint" id="constraintHint"></div>
+      </div>
+    </div>
+
+    <div class="topbar-spacer"></div>
+    <button class="btn" id="clearAllBtn">Clear all</button>
+    <button class="btn primary" id="saveZipBtn">⬇ Save as file(s)</button>
+  </div>
+
+  <div class="sim-strip" id="simStrip" style="display:none;"></div>
+
+  <div class="main" id="mainArea">
+    <div class="empty-state" id="emptyState">
+      <div class="glyph">≠ ≡</div>
+      <h2>Add two or more files to compare</h2>
+      <p>Use the Files menu to upload or paste content. With exactly two files you'll go straight to an editable side-by-side diff. With three or more, a similarity strip appears up top — click any pair to open it.</p>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="zipModal">
+  <div class="modal">
+    <h3>Save as file(s)</h3>
+    <p class="desc">Confirm a file extension for each file, then download everything as a .zip. Current edits from the diff view are included.</p>
+    <div id="zipFileRows"></div>
+    <div class="modal-actions">
+      <button class="btn" id="zipCancelBtn">Cancel</button>
+      <button class="btn primary" id="zipConfirmBtn">Download .zip</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+
+// ---------------- State ----------------
+let files = []; // {id, name, content, excluded}
+let fileCounter = 0;
+let currentView = 'empty';
+let currentPair = null;
+let excludePatterns = [];
+let syncingScroll = false;
+
+const opts = () => ({
+  lineNumbers: document.getElementById('optLineNumbers').checked,
+  highlightDiff: document.getElementById('optHighlightDiff').checked,
+  highlightSame: document.getElementById('optHighlightSame').checked,
+  inlineChars: document.getElementById('optInlineChars').checked,
+  diffOnly: document.getElementById('optDiffOnly').checked,
+  ignoreCase: document.getElementById('optIgnoreCase').checked,
+  ignoreWhitespace: document.getElementById('optIgnoreWhitespace').checked,
+  syncScroll: document.getElementById('optSyncScroll').checked,
+  editable: document.getElementById('optEditable').checked,
+});
+
+function escapeHtml(s) { return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// ---------------- Menus ----------------
+const menus = [
+  ['filesMenuBtn','filesMenu'], ['displayMenuBtn','displayMenu'],
+  ['excludeMenuBtn','excludeMenu'], ['constraintMenuBtn','constraintMenu']
+];
+menus.forEach(([btnId, panelId]) => {
+  document.getElementById(btnId).addEventListener('click', (e) => {
+    e.stopPropagation();
+    const panel = document.getElementById(panelId);
+    const isOpen = panel.classList.contains('open');
+    document.querySelectorAll('.menu-panel').forEach(p => p.classList.remove('open'));
+    if (!isOpen) panel.classList.add('open');
+  });
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.menu-wrap')) document.querySelectorAll('.menu-panel').forEach(p => p.classList.remove('open'));
+});
+document.querySelectorAll('.menu-panel').forEach(p => p.addEventListener('click', e => e.stopPropagation()));
+
+// ---------------- Theme ----------------
+document.getElementById('themeSwitch').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-theme]');
+  if (!btn) return;
+  document.body.setAttribute('data-theme', btn.dataset.theme);
+  [...document.querySelectorAll('.theme-mini button')].forEach(b => b.classList.toggle('active', b === btn));
+});
+
+// ---------------- File ingestion ----------------
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); handleFileList(e.dataTransfer.files); });
+fileInput.addEventListener('change', (e) => handleFileList(e.target.files));
+
+function handleFileList(fileListObj) {
+  [...fileListObj].forEach(f => {
+    const reader = new FileReader();
+    reader.onload = (ev) => addFile(f.name, ev.target.result, true);
+    reader.readAsText(f);
+  });
+}
+document.getElementById('pasteAddBtn').addEventListener('click', () => {
+  const nameEl = document.getElementById('pasteName');
+  const textEl = document.getElementById('pasteText');
+  const text = textEl.value;
+  if (!text.trim()) return;
+  const name = nameEl.value.trim() || `snippet-${fileCounter + 1}`;
+  addFile(name, text, false);
+  nameEl.value = ''; textEl.value = '';
+});
+
+function addFile(name, content, hasExtension) {
+  fileCounter++;
+  files.push({ id: 'f' + fileCounter, name, content, excluded: false, hasExtension });
+  renderFileList();
+  renderMain();
+}
+function removeFile(id) { files = files.filter(f => f.id !== id); renderFileList(); renderMain(); }
+function toggleExclude(id) { const f = files.find(f => f.id === id); if (f) f.excluded = !f.excluded; renderFileList(); renderMain(); }
+
+document.getElementById('clearAllBtn').addEventListener('click', () => {
+  files = []; currentView = 'empty'; renderFileList(); renderMain();
+});
+
+function renderFileList() {
+  const el = document.getElementById('fileList');
+  el.innerHTML = '';
+  files.forEach(f => {
+    const row = document.createElement('div');
+    row.className = 'file-chip' + (f.excluded ? ' excluded' : '');
+    row.innerHTML = `
+      <span class="eye ${f.excluded ? '' : 'on'}" title="Toggle include/exclude" data-action="toggle" data-id="${f.id}">${f.excluded ? '⦻' : '◉'}</span>
+      <span class="fname" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+      <button title="Remove" data-action="remove" data-id="${f.id}">✕</button>
+    `;
+    el.appendChild(row);
+  });
+  document.getElementById('fileCountBadge').textContent = files.length ? `(${files.length})` : '';
+  el.querySelectorAll('[data-action="toggle"]').forEach(elm => elm.addEventListener('click', () => toggleExclude(elm.dataset.id)));
+  el.querySelectorAll('[data-action="remove"]').forEach(elm => elm.addEventListener('click', () => removeFile(elm.dataset.id)));
+}
+
+// ---------------- Exclude content patterns ----------------
+document.getElementById('excludePatternAdd').addEventListener('click', addExcludePattern);
+document.getElementById('excludePatternInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') addExcludePattern(); });
+function addExcludePattern() {
+  const input = document.getElementById('excludePatternInput');
+  const val = input.value.trim();
+  if (!val) return;
+  excludePatterns.push(val); input.value = '';
+  renderExcludeTags(); renderMain();
+}
+function renderExcludeTags() {
+  const el = document.getElementById('excludePatternList');
+  el.innerHTML = '';
+  excludePatterns.forEach((p, i) => {
+    const tag = document.createElement('div');
+    tag.className = 'tag';
+    tag.innerHTML = `<span>${escapeHtml(p)}</span><button data-i="${i}">✕</button>`;
+    el.appendChild(tag);
+  });
+  el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { excludePatterns.splice(+b.dataset.i, 1); renderExcludeTags(); renderMain(); }));
+}
+function patternToRegex(p) { try { return new RegExp(p); } catch (e) { return null; } }
+function applyExclusions(text) {
+  if (!excludePatterns.length) return text;
+  const regexes = excludePatterns.map(patternToRegex).filter(Boolean);
+  return text.split('\n').filter(line => !regexes.some(re => re.test(line))).join('\n');
+}
+
+// ---------------- Constraint filter ----------------
+document.getElementById('constraintType').addEventListener('change', (e) => {
+  const v = e.target.value;
+  const valInput = document.getElementById('constraintValue');
+  const hint = document.getElementById('constraintHint');
+  const hints = { none:'', contains:'Only diffs where either line contains this text are shown.', hasnumber:'Only diffs where either line contains a digit are shown.', regex:'Only diffs where either line matches this regex are shown.', minlen:'Only diffs where either line is longer than N characters.' };
+  valInput.style.display = (v === 'none' || v === 'hasnumber') ? 'none' : 'block';
+  valInput.placeholder = v === 'minlen' ? 'e.g. 40' : v === 'regex' ? 'e.g. ^ERROR' : 'e.g. TODO';
+  hint.textContent = hints[v] || '';
+  renderMain();
+});
+document.getElementById('constraintValue').addEventListener('input', renderMain);
+function constraintMatches(lineA, lineB) {
+  const type = document.getElementById('constraintType').value;
+  if (type === 'none') return true;
+  const val = document.getElementById('constraintValue').value;
+  const test = (line) => {
+    if (line === null || line === undefined) return false;
+    switch (type) {
+      case 'contains': return val ? line.includes(val) : true;
+      case 'hasnumber': return /\d/.test(line);
+      case 'regex': { const re = patternToRegex(val); return re ? re.test(line) : true; }
+      case 'minlen': return line.length > (parseInt(val) || 0);
+      default: return true;
+    }
+  };
+  return test(lineA) || test(lineB);
+}
+
+// ---------------- Display option listeners ----------------
+['optLineNumbers','optHighlightDiff','optHighlightSame','optInlineChars','optDiffOnly','optIgnoreCase','optIgnoreWhitespace','optSyncScroll','optEditable']
+  .forEach(id => document.getElementById(id).addEventListener('change', renderMain));
+
+// ---------------- Diff engine ----------------
+function normalizeLine(line, o) {
+  let l = line;
+  if (o.ignoreWhitespace) l = l.trim().replace(/\s+/g, ' ');
+  if (o.ignoreCase) l = l.toLowerCase();
+  return l;
+}
+function lcsDiff(aLines, bLines, o) {
+  const na = aLines.length, nb = bLines.length;
+  const an = aLines.map(l => normalizeLine(l, o));
+  const bn = bLines.map(l => normalizeLine(l, o));
+  const dp = Array.from({length: na+1}, () => new Int32Array(nb+1));
+  for (let i = na-1; i >= 0; i--)
+    for (let j = nb-1; j >= 0; j--)
+      dp[i][j] = an[i] === bn[j] ? dp[i+1][j+1] + 1 : Math.max(dp[i+1][j], dp[i][j+1]);
+  const ops = [];
+  let i = 0, j = 0;
+  while (i < na && j < nb) {
+    if (an[i] === bn[j]) { ops.push({type:'same', a:aLines[i], b:bLines[j]}); i++; j++; }
+    else if (dp[i+1][j] >= dp[i][j+1]) { ops.push({type:'rem', a:aLines[i], b:null}); i++; }
+    else { ops.push({type:'add', a:null, b:bLines[j]}); j++; }
+  }
+  while (i < na) { ops.push({type:'rem', a:aLines[i], b:null}); i++; }
+  while (j < nb) { ops.push({type:'add', a:null, b:bLines[j]}); j++; }
+  const merged = [];
+  for (let k = 0; k < ops.length; k++) {
+    if (ops[k].type === 'rem' && ops[k+1] && ops[k+1].type === 'add') {
+      merged.push({type:'mod', a: ops[k].a, b: ops[k+1].b}); k++;
+    } else merged.push(ops[k]);
+  }
+  return merged;
+}
+function inlineCharDiff(a, b) {
+  const aw = a.split(/(\s+)/), bw = b.split(/(\s+)/);
+  const na = aw.length, nb = bw.length;
+  const dp = Array.from({length: na+1}, () => new Int32Array(nb+1));
+  for (let i = na-1; i >= 0; i--)
+    for (let j = nb-1; j >= 0; j--)
+      dp[i][j] = aw[i] === bw[j] ? dp[i+1][j+1]+1 : Math.max(dp[i+1][j], dp[i][j+1]);
+  let i=0,j=0; const aOut = [], bOut = [];
+  while (i<na && j<nb) {
+    if (aw[i] === bw[j]) { aOut.push({t:aw[i],same:true}); bOut.push({t:bw[j],same:true}); i++; j++; }
+    else if (dp[i+1][j] >= dp[i][j+1]) { aOut.push({t:aw[i],same:false}); i++; }
+    else { bOut.push({t:bw[j],same:false}); j++; }
+  }
+  while (i<na) { aOut.push({t:aw[i],same:false}); i++; }
+  while (j<nb) { bOut.push({t:bw[j],same:false}); j++; }
+  const render = (arr) => arr.map(p => p.same ? escapeHtml(p.t) : `<mark class="inline-diff mod-mark">${escapeHtml(p.t)}</mark>`).join('');
+  return [render(aOut), render(bOut)];
+}
+function similarity(aLines, bLines, o) {
+  if (aLines.length === 0 && bLines.length === 0) return 100;
+  const ops = lcsDiff(aLines, bLines, o);
+  const sameCount = ops.filter(op => op.type === 'same').length;
+  const total = Math.max(aLines.length, bLines.length) || 1;
+  return Math.round((sameCount / total) * 100);
+}
+function getProcessedLines(file) { return applyExclusions(file.content).split('\n'); }
+
+// ---------------- Main render dispatcher ----------------
+function renderMain() {
+  const activeFiles = files.filter(f => !f.excluded);
+  const mainArea = document.getElementById('mainArea');
+  const simStrip = document.getElementById('simStrip');
+
+  if (activeFiles.length < 2) {
+    currentView = 'empty';
+    simStrip.style.display = 'none';
+    mainArea.innerHTML = '';
+    mainArea.innerHTML = `<div class="empty-state"><div class="glyph">≠ ≡</div><h2>Add two or more files to compare</h2><p>Use the Files menu to upload or paste content. With exactly two files you'll go straight to an editable side-by-side diff. With three or more, a similarity strip appears up top — click any pair to open it.</p></div>`;
+    return;
+  }
+
+  // similarity strip always visible when 2+ files
+  renderSimStrip(activeFiles);
+
+  if (activeFiles.length === 2) {
+    currentPair = [activeFiles[0].id, activeFiles[1].id];
+    currentView = 'diff';
+    renderDiffView(currentPair);
+    return;
+  }
+
+  // 3+: keep diff view if a valid pair is already selected, else show matrix
+  if (currentView === 'diff' && currentPair && activeFiles.find(f=>f.id===currentPair[0]) && activeFiles.find(f=>f.id===currentPair[1])) {
+    renderDiffView(currentPair);
+  } else {
+    currentView = 'matrix';
+    renderMatrix(activeFiles);
+  }
+}
+
+// ---------------- Persistent similarity strip ----------------
+function renderSimStrip(activeFiles) {
+  const strip = document.getElementById('simStrip');
+  const o = opts();
+  const n = activeFiles.length;
+  if (n < 2) { strip.style.display = 'none'; return; }
+  strip.style.display = 'flex';
+  let html = `<span class="strip-label">Similarity</span>`;
+
+  function colorFor(pct) {
+    if (pct >= 95) return {bg: 'var(--add-bg)', border: 'var(--add-strong)'};
+    if (pct >= 60) return {bg: 'var(--mod-bg)', border: 'var(--mod-strong)'};
+    return {bg: 'var(--rem-bg)', border: 'var(--rem-strong)'};
+  }
+
+  const pairs = [];
+  for (let i = 0; i < n; i++) for (let j = i+1; j < n; j++) pairs.push([i,j]);
+
+  pairs.forEach(([i,j]) => {
+    const fa = activeFiles[i], fb = activeFiles[j];
+    const pct = similarity(getProcessedLines(fa), getProcessedLines(fb), o);
+    const c = colorFor(pct);
+    const isCurrent = currentPair && ((currentPair[0]===fa.id && currentPair[1]===fb.id) || (currentPair[0]===fb.id && currentPair[1]===fa.id));
+    html += `<span class="sim-chip${isCurrent?' current':''}" style="background:${c.bg}; border-color:${c.border}; color:${c.border};" data-a="${fa.id}" data-b="${fb.id}">${pct}% <span class="names">${escapeHtml(shortName(fa.name))} ↔ ${escapeHtml(shortName(fb.name))}</span></span>`;
+  });
+  strip.innerHTML = html;
+  strip.querySelectorAll('.sim-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      currentPair = [chip.dataset.a, chip.dataset.b];
+      currentView = 'diff';
+      renderDiffView(currentPair);
+      renderSimStrip(files.filter(f=>!f.excluded));
+    });
+  });
+}
+function shortName(n) { return n.length > 18 ? n.slice(0,16)+'…' : n; }
+
+// ---------------- Matrix view (3+ files, default landing) ----------------
+function renderMatrix(activeFiles) {
+  const mainArea = document.getElementById('mainArea');
+  const o = opts();
+  const n = activeFiles.length;
+  const sims = {};
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    if (i === j) continue;
+    const key = i+'_'+j;
+    if (sims[key] !== undefined) continue;
+    const s = similarity(getProcessedLines(activeFiles[i]), getProcessedLines(activeFiles[j]), o);
+    sims[i+'_'+j] = s; sims[j+'_'+i] = s;
+  }
+  function colorFor(pct) {
+    if (pct >= 95) return {bg: 'var(--add-bg)', border: 'var(--add-strong)'};
+    if (pct >= 60) return {bg: 'var(--mod-bg)', border: 'var(--mod-strong)'};
+    return {bg: 'var(--rem-bg)', border: 'var(--rem-strong)'};
+  }
+  let html = `<div class="matrix-wrap"><div class="matrix-header"><h2>Similarity matrix — ${n} files</h2><p>Click any cell (or a chip above) to open the full editable diff for that pair.</p></div><div style="overflow:auto;"><table class="matrix-table"><tr><th></th>`;
+  activeFiles.forEach(f => html += `<th class="rot">${escapeHtml(f.name)}</th>`);
+  html += `</tr>`;
+  activeFiles.forEach((rowFile, i) => {
+    html += `<tr><th>${escapeHtml(rowFile.name)}</th>`;
+    activeFiles.forEach((colFile, j) => {
+      if (i === j) { html += `<td class="mcell diag">—</td>`; return; }
+      const pct = sims[i+'_'+j]; const c = colorFor(pct);
+      html += `<td class="mcell" style="background:${c.bg}; border-color:${c.border}; color:${c.border};" data-i="${i}" data-j="${j}" title="${escapeHtml(rowFile.name)} vs ${escapeHtml(colFile.name)}">${pct}%</td>`;
+    });
+    html += `</tr>`;
+  });
+  html += `</table></div><div class="legend"><span class="swatch"><span class="sq" style="background:var(--add-strong)"></span> 95–100% match</span><span class="swatch"><span class="sq" style="background:var(--mod-strong)"></span> 60–94% match</span><span class="swatch"><span class="sq" style="background:var(--rem-strong)"></span> below 60% match</span></div></div>`;
+  mainArea.innerHTML = html;
+  mainArea.querySelectorAll('.mcell[data-i]').forEach(cell => {
+    cell.addEventListener('click', () => {
+      const i = +cell.dataset.i, j = +cell.dataset.j;
+      currentPair = [activeFiles[i].id, activeFiles[j].id];
+      currentView = 'diff';
+      renderDiffView(currentPair);
+      renderSimStrip(activeFiles);
+    });
+  });
+}
+
+// ---------------- Diff + editable + merge view ----------------
+function renderDiffView(pair) {
+  const mainArea = document.getElementById('mainArea');
+  const o = opts();
+  const fileA = files.find(f => f.id === pair[0]);
+  const fileB = files.find(f => f.id === pair[1]);
+  const activeFiles = files.filter(f => !f.excluded);
+  if (!fileA || !fileB) return;
+
+  const aLines = getProcessedLines(fileA);
+  const bLines = getProcessedLines(fileB);
+  const ops = lcsDiff(aLines, bLines, o);
+
+  let addCount=0, remCount=0, modCount=0, sameCount=0;
+  ops.forEach(op => { if(op.type==='add')addCount++; else if(op.type==='rem')remCount++; else if(op.type==='mod')modCount++; else sameCount++; });
+
+  const backBtn = activeFiles.length > 2 ? `<button class="back" id="backToMatrix">← Back to matrix</button>` : `<span></span>`;
+
+  mainArea.innerHTML = `
+    <div class="diff-toolbar">
+      ${backBtn}
+      <div class="filenames">${escapeHtml(fileA.name)} <span class="vs">vs</span> ${escapeHtml(fileB.name)}</div>
+      <div class="stats">
+        <span><span class="dot" style="background:var(--add-strong)"></span>${addCount} added</span>
+        <span><span class="dot" style="background:var(--rem-strong)"></span>${remCount} removed</span>
+        <span><span class="dot" style="background:var(--mod-strong)"></span>${modCount} modified</span>
+        <span><span class="dot" style="background:var(--same-dim)"></span>${sameCount} unchanged</span>
+      </div>
+    </div>
+    <div class="diff-panes ${o.diffOnly ? 'hide-same' : ''} ${o.highlightSame ? 'highlight-same' : ''}">
+      <div class="pane ${o.lineNumbers ? '' : 'no-lineno'}" id="paneA">
+        <div class="pane-head"><span>${escapeHtml(fileA.name)}</span>${o.editable ? '<span class="editable-tag">editable</span>' : ''}</div>
+        <table class="code-table"><colgroup><col class="ln-col"><col class="merge-col"><col></colgroup>${buildPaneRows(ops, 'a', o)}</table>
+      </div>
+      <div class="pane ${o.lineNumbers ? '' : 'no-lineno'}" id="paneB">
+        <div class="pane-head"><span>${escapeHtml(fileB.name)}</span>${o.editable ? '<span class="editable-tag">editable</span>' : ''}</div>
+        <table class="code-table"><colgroup><col class="ln-col"><col class="merge-col"><col></colgroup>${buildPaneRows(ops, 'b', o)}</table>
+      </div>
+    </div>
+  `;
+
+  const backBtnEl = document.getElementById('backToMatrix');
+  if (backBtnEl) backBtnEl.addEventListener('click', () => { currentView = 'matrix'; renderMain(); });
+
+  const paneA = document.getElementById('paneA');
+  const paneB = document.getElementById('paneB');
+  if (o.syncScroll) {
+    paneA.addEventListener('scroll', () => syncScroll(paneA, paneB));
+    paneB.addEventListener('scroll', () => syncScroll(paneA, paneB));
+  }
+
+  // editable cells: commit content back to file model on blur
+  if (o.editable) {
+    mainArea.querySelectorAll('.content-cell[contenteditable="true"]').forEach(cell => {
+      cell.addEventListener('blur', () => commitEdits(fileA, fileB));
+      cell.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); cell.blur(); }
+      });
+    });
+  }
+
+  // merge buttons
+  mainArea.querySelectorAll('.merge-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const dir = btn.dataset.dir; // 'ltr' or 'rtl'
+      const opIndex = +btn.dataset.opidx;
+      mergeBlock(fileA, fileB, ops, opIndex, dir, o);
+    });
+  });
+}
+
+function syncScroll(src, dst) {
+  if (syncingScroll) return;
+  syncingScroll = true;
+  dst.scrollTop = src.scrollTop; dst.scrollLeft = src.scrollLeft;
+  requestAnimationFrame(() => syncingScroll = false);
+}
+
+function buildPaneRows(ops, side, o) {
+  let rows = '';
+  let lineNo = 0;
+  ops.forEach((op, idx) => {
+    const constraintOk = op.type === 'same' || constraintMatches(op.a, op.b);
+
+    if (op.type === 'same') {
+      lineNo++;
+      rows += rowHtml('row-same', sideText(op, side), o, side, false, '', null, idx, false, lineNo);
+      return;
+    }
+
+    if (!constraintOk) {
+      lineNo++;
+      rows += rowHtml('', sideText(op, side), o, side, false, '', null, idx, true, lineNo);
+      return;
+    }
+
+    if (op.type === 'add') {
+      if (side === 'a') { rows += rowHtml('row-empty', '', o, side, false, '', null, idx, false, ''); }
+      else { lineNo++; rows += rowHtml(o.highlightDiff ? 'row-add' : '', op.b, o, side, false, '+', {dir:'rtl', opidx: idx}, idx, false, lineNo); }
+      return;
+    }
+    if (op.type === 'rem') {
+      if (side === 'b') { rows += rowHtml('row-empty', '', o, side, false, '', null, idx, false, ''); }
+      else { lineNo++; rows += rowHtml(o.highlightDiff ? 'row-rem' : '', op.a, o, side, false, '−', {dir:'ltr', opidx: idx}, idx, false, lineNo); }
+      return;
+    }
+    if (op.type === 'mod') {
+      lineNo++;
+      let text = side === 'a' ? op.a : op.b;
+      let rendered = escapeHtml(text || '');
+      let preEscaped = false;
+      if (o.inlineChars) {
+        const [aHtml, bHtml] = inlineCharDiff(op.a || '', op.b || '');
+        rendered = side === 'a' ? aHtml : bHtml;
+        preEscaped = true;
+      }
+      const cls = (o.highlightDiff ? 'row-mod ' : '') + (side==='a'?'pane-a':'pane-b');
+      const mergeBtns = { dir: side === 'a' ? 'rtl' : 'ltr', opidx: idx, both: true };
+      rows += rowHtml(cls, rendered, o, side, preEscaped, '~', mergeBtns, idx, false, lineNo);
+      return;
+    }
+  });
+  return rows;
+}
+function sideText(op, side) { return side === 'a' ? (op.a || '') : (op.b || ''); }
+
+function rowHtml(cls, text, o, side, preEscaped, mark, mergeInfo, opIdx, constraintNeutral, lineNo) {
+  let mergeCell = `<td class="merge-btn-cell"></td>`;
+  if (mergeInfo && !cls.includes('row-empty')) {
+    if (mergeInfo.both) {
+      const arrow = side === 'a' ? '→' : '←';
+      const dir = side === 'a' ? 'rtl' : 'ltr';
+      mergeCell = `<td class="merge-btn-cell"><button class="merge-btn" data-dir="${dir}" data-opidx="${opIdx}" title="Merge this line to the other side">${arrow}</button></td>`;
+    } else {
+      const arrow = mergeInfo.dir === 'rtl' ? '→' : '←';
+      mergeCell = `<td class="merge-btn-cell"><button class="merge-btn" data-dir="${mergeInfo.dir}" data-opidx="${opIdx}" title="Merge this line to the other side">${arrow}</button></td>`;
+    }
+  }
+  const markSpan = mark ? `<span class="chmark" contenteditable="false">${mark}</span>` : `<span class="chmark" contenteditable="false"></span>`;
+  const body = preEscaped ? text : escapeHtml(text || '');
+  const editable = o.editable && !cls.includes('row-empty') ? ' contenteditable="true"' : '';
+  const lnCell = `<td class="ln">${lineNo || ''}</td>`;
+  return `<tr class="${cls}" data-opidx="${opIdx}" data-side="${side}">${lnCell}${mergeCell}<td class="content-cell"${editable}>${markSpan}${body}</td></tr>`;
+}
+
+// ---------------- Merge logic ----------------
+function mergeBlock(fileA, fileB, ops, opIndex, dir, o) {
+  const op = ops[opIndex];
+  if (!op) return;
+  // Recompute current raw lines fresh (in case of prior edits) then apply the merge by rewriting whole content.
+  // Simplest robust approach: re-run diff, then rebuild each file's line array applying the merge decision at this op.
+  const aLines = getProcessedLinesRaw(fileA);
+  const bLines = getProcessedLinesRaw(fileB);
+  const freshOps = lcsDiff(aLines, bLines, o);
+  const target = freshOps[opIndex];
+  if (!target) { renderMain(); return; }
+
+  let newA = [], newB = [];
+  freshOps.forEach((fop, idx) => {
+    if (idx !== opIndex) {
+      if (fop.type === 'same') { newA.push(fop.a); newB.push(fop.b); return; }
+      if (fop.type === 'add') { newB.push(fop.b); return; } // a has nothing here
+      if (fop.type === 'rem') { newA.push(fop.a); return; }
+      if (fop.type === 'mod') { newA.push(fop.a); newB.push(fop.b); return; }
+      return;
+    }
+    // this is the block being merged
+    if (dir === 'ltr') {
+      // copy A's version into B
+      if (fop.a !== null && fop.a !== undefined) { newA.push(fop.a); newB.push(fop.a); }
+      else { /* rem-only shouldn't hit ltr on empty a */ }
+    } else {
+      // rtl: copy B's version into A
+      if (fop.b !== null && fop.b !== undefined) { newA.push(fop.b); newB.push(fop.b); }
+    }
+  });
+
+  fileA.content = newA.join('\n');
+  fileB.content = newB.join('\n');
+  renderMain();
+}
+function getProcessedLinesRaw(file) { return applyExclusions(file.content).split('\n'); }
+
+// ---------------- Commit inline edits back to file model ----------------
+function commitEdits(fileA, fileB) {
+  const paneA = document.getElementById('paneA');
+  const paneB = document.getElementById('paneB');
+  if (!paneA || !paneB) return;
+  // The chmark (+/−/~) lives in its own <span>, separate from the actual text.
+  // Read only the text after that span so user edits never get polluted by the marker glyph.
+  const readCellText = (td) => {
+    const clone = td.cloneNode(true);
+    const mark = clone.querySelector('.chmark');
+    if (mark) mark.remove();
+    return clone.innerText.replace(/\n$/, '');
+  };
+  const linesA = [...paneA.querySelectorAll('tr:not(.row-empty) .content-cell')].map(readCellText);
+  const linesB = [...paneB.querySelectorAll('tr:not(.row-empty) .content-cell')].map(readCellText);
+  fileA.content = linesA.join('\n');
+  fileB.content = linesB.join('\n');
+}
+
+// ---------------- Save as file(s) / ZIP export ----------------
+document.getElementById('saveZipBtn').addEventListener('click', openZipModal);
+document.getElementById('zipCancelBtn').addEventListener('click', closeZipModal);
+function closeZipModal() { document.getElementById('zipModal').classList.remove('open'); }
+
+function guessExt(name) {
+  const m = name.match(/\.([a-zA-Z0-9]+)$/);
+  return m ? m[1] : '';
+}
+
+function openZipModal() {
+  if (!files.length) return;
+  const rowsEl = document.getElementById('zipFileRows');
+  rowsEl.innerHTML = '';
+  files.forEach(f => {
+    const ext = guessExt(f.name);
+    const baseName = ext ? f.name.slice(0, -(ext.length+1)) : f.name;
+    const row = document.createElement('div');
+    row.className = 'modal-file-row';
+    row.innerHTML = `
+      <span class="mname" title="${escapeHtml(f.name)}">${escapeHtml(baseName)}</span>
+      <input type="text" class="textinput ext" data-id="${f.id}" data-base="${escapeHtml(baseName)}" value="${escapeHtml(ext || 'txt')}" placeholder="ext">
+    `;
+    rowsEl.appendChild(row);
+  });
+  document.getElementById('zipModal').classList.add('open');
+}
+
+document.getElementById('zipConfirmBtn').addEventListener('click', async () => {
+  const inputs = document.querySelectorAll('#zipFileRows .ext');
+  const zip = new JSZip();
+  inputs.forEach(inp => {
+    const f = files.find(ff => ff.id === inp.dataset.id);
+    if (!f) return;
+    const ext = inp.value.trim().replace(/^\./, '') || 'txt';
+    const base = inp.dataset.base || f.name;
+    const finalName = `${base}.${ext}`;
+    zip.file(finalName, f.content);
+  });
+  const blob = await zip.generateAsync({type: 'blob'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'diffyard-export.zip';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  closeZipModal();
+});
+
+// init
+renderFileList();
+renderMain();
+
+})();
+</script>
+</body>
+</html>
